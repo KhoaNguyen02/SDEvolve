@@ -8,16 +8,16 @@ from .base_evaluator import BaseEvaluator
 
 
 class SHOEvaluator(BaseEvaluator):
-    def __init__(self, env, state_size, dt0, reward_fn=None, solver=diffrax.Euler(),
-                max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
+    def __init__(self, env, state_size, dt0, feedback_fn, solver=diffrax.Euler(), max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
         super().__init__(env, state_size, dt0)
-        self.reward_fn = reward_fn
         self.solver = solver
         self.max_steps = max_steps
         self.stepsize_controller = stepsize_controller
+        self.feedback_fn = feedback_fn
+        self.eps = 1e-3
 
     def __call__(self, candidate, data, tree_evaluator):
-        xs, ys, us, activities, fitness, rewards = jax.vmap(
+        _, _, _, _, fitness, fbs = jax.vmap(
             self.evaluate_trajectory,
             in_axes=[None, 0, None, 0, 0, 0, None]
         )(candidate, *data, tree_evaluator)
@@ -29,66 +29,83 @@ class SHOEvaluator(BaseEvaluator):
 
         state_equation = candidate[:self.state_size]
         readout = candidate[self.state_size:]
+
         saveat = diffrax.SaveAt(ts=ts)
         process_noise_key, obs_noise_key = jr.split(noise_key, 2)
-
         _x0 = jnp.concatenate([x0, jnp.zeros(self.state_size)])
-        ode = diffrax.ODETerm(self._drift)
-        control_term = diffrax.ControlTerm(
-            self._diffusion,
-            diffrax.UnsafeBrownianPath(shape=(env.n_var,), key=process_noise_key, levy_area=diffrax.SpaceTimeLevyArea)
+        targets = diffrax.LinearInterpolation(ts, target.squeeze(-1) if target.ndim == 2 else target)
+
+        brownian_motion = diffrax.UnsafeBrownianPath(
+            shape=(self.latent_size,), key=process_noise_key, levy_area=diffrax.SpaceTimeLevyArea
         )
-        system = diffrax.MultiTerm(ode, control_term)
-        target_interp = diffrax.LinearInterpolation(ts, target)
+        system = diffrax.MultiTerm(
+            diffrax.ODETerm(self._drift), diffrax.ControlTerm(self._diffusion, brownian_motion)
+        )
 
         sol = diffrax.diffeqsolve(
-            system, self.solver, ts[0], ts[-1], self.dt0, _x0, saveat=saveat,
-            adjoint=diffrax.DirectAdjoint(), max_steps=self.max_steps,
-            event=diffrax.Event(env.cond_fn_nan),
-            args=(env, state_equation, readout, obs_noise_key, target_interp, tree_evaluator),
+            system, self.solver, ts[0], ts[-1], self.dt0, _x0, 
+            saveat=saveat, adjoint=diffrax.DirectAdjoint(), max_steps=self.max_steps,
+            args=(env, state_equation, readout, obs_noise_key, targets, tree_evaluator), 
             stepsize_controller=self.stepsize_controller, throw=False
         )
 
         xs = sol.ys[:, :self.latent_size]
-        activities = sol.ys[:, self.latent_size:]
         _, ys = jax.lax.scan(env.f_obs, obs_noise_key, (ts, xs))
-
-        if self.reward_fn is not None:
-            target_t = jnp.reshape(target, (-1, 1))
-            rs = jax.vmap(self.reward_fn, in_axes=(0, 0, 0))(ts, xs, target_t)
-            feedback = rs
+        activities = sol.ys[:, self.latent_size:]
+        if self.feedback_fn:
+            # feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
+            keys = jr.split(obs_noise_key, len(ts))
+            feedbacks = jax.vmap(
+                lambda t, x, k: self._get_feedback(x, jnp.squeeze(targets.evaluate(t)), k)
+            )(ts, xs, keys)
         else:
-            rs = jnp.zeros((xs.shape[0],))
-            feedback = target
+            feedbacks = targets.evaluate(ts)[:, None]
 
-        us = jax.vmap(lambda y, a, fb: tree_evaluator(
-            readout, jnp.concatenate([y, a, jnp.zeros(self.control_size), jnp.atleast_1d(fb)]))
-        )(ys, activities, feedback)
-        fitness = env.fitness_function(xs, us[:, None], target, ts)
-        return xs, ys, us, activities, fitness, rs
+        us = jax.vmap(lambda y, a, tar: tree_evaluator(
+            readout, jnp.concatenate([y, a, jnp.zeros(self.control_size), tar])), in_axes=[0, 0, 0]
+        )(ys, activities, feedbacks)
+        fitness = env.fitness_function(xs, us, targets.evaluate(ts), ts)
+        return xs, ys, us, activities, fitness, feedbacks
 
     def _drift(self, t, x_a, args):
-        env, state_equation, readout, obs_noise_key, target_interp, tree_evaluator = args
+        env, state_equation, readout, obs_noise_key, target, tree_evaluator = args
         x = x_a[:self.latent_size]
         a = x_a[self.latent_size:]
+        target_t = jnp.atleast_1d(target.evaluate(t))
+
         _, y = env.f_obs(obs_noise_key, (t, x))
-        target_t = jnp.atleast_1d(target_interp.evaluate(t))
-        if self.reward_fn is not None:
-            r = jnp.atleast_1d(self.reward_fn(t, x, target_t))
-            u = tree_evaluator(readout, jnp.concatenate([jnp.zeros(self.obs_size), a, jnp.zeros(self.control_size), r])
-            )
-            dx = env.drift(t, x, jnp.atleast_1d(u))
-            da = tree_evaluator(state_equation, jnp.concatenate([y, a, jnp.atleast_1d(u), r]))
-        else:
-            u = tree_evaluator(readout, jnp.concatenate(
-                [jnp.zeros(self.obs_size), a, jnp.zeros(self.control_size), target_t])
-            )
-            dx = env.drift(t, x, jnp.atleast_1d(u))
-            da = tree_evaluator(state_equation, jnp.concatenate([y, a, jnp.atleast_1d(u), target_t]))
+
+        if self.feedback_fn:
+            # feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
+            # target_t = feedback_t
+            feedback_t = self._get_feedback(x, target_t, jr.fold_in(obs_noise_key, jnp.int32(jnp.round(t / self.dt0))))
+            target_t = jnp.atleast_1d(feedback_t)
+        u = tree_evaluator(
+            readout,
+            jnp.concatenate([jnp.zeros(self.obs_size), a, jnp.zeros(self.control_size), target_t])
+        )
+
+        # Apply control to system and get system change
+        dx = env.drift(t, x, u)
+        da = tree_evaluator(
+            state_equation,
+            jnp.concatenate([y, a, u, target_t])
+        )
         return jnp.concatenate([dx, da])
 
     def _diffusion(self, t, x_a, args):
-        env, state_equation, readout, obs_noise_key, target_interp, tree_evaluator = args
+        env, state_equation, readout, obs_noise_key, target, tree_evaluator = args
         x = x_a[:self.latent_size]
-        return jnp.concatenate([env.diffusion(t, x, jnp.array([0])),
-                                jnp.zeros((self.state_size, self.latent_size))])
+        a = x_a[self.latent_size:]
+        return jnp.concatenate(
+            [env.diffusion(t, x, jnp.array([0])), jnp.zeros((self.state_size, self.latent_size))]
+        )
+
+    def _get_feedback(self, x, target, key):
+        delta = jr.normal(key, x.shape, dtype=x.dtype)
+        phi_p = self.feedback_fn(x + self.eps * delta, target)
+        phi_m = self.feedback_fn(x - self.eps * delta, target)
+        g = ((phi_p - phi_m) / (2.0 * self.eps)) * delta
+        s = -jnp.sign(g[0])
+        d = self.feedback_fn(x, target)
+        return jnp.reshape(s * d, (1,))
