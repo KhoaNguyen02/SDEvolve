@@ -91,7 +91,7 @@ def validate(models, strategy, data):
     return fitnesses[best_idx], models[best_idx]
 
 
-def get_strategy(env, operator_list, dt0, reward_fn, max_steps=2000, device="cpu"):
+def get_strategy(env, operator_list, dt0, feedback_fn, max_steps=2000, device="cpu"):
     variable_list = [
         # Latent memory
         [f"y{i}" for i in range(env.n_obs)] +
@@ -102,7 +102,7 @@ def get_strategy(env, operator_list, dt0, reward_fn, max_steps=2000, device="cpu
         [f"a{i}" for i in range(2)]
     ]
     if env.n_targets > 0:
-        if reward_fn is None:
+        if feedback_fn is None:
             for var_list in variable_list:
                 var_list.append("tar")
         else:
@@ -111,7 +111,7 @@ def get_strategy(env, operator_list, dt0, reward_fn, max_steps=2000, device="cpu
 
         layer_sizes = jnp.array([2, env.n_control_inputs])
 
-        fitness_function = SHOEvaluator(env, 2, dt0, reward_fn=reward_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
+        fitness_function = SHOEvaluator(env, 2, dt0, feedback_fn=feedback_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
 
         strategy = GeneticProgramming(
             fitness_function=fitness_function,

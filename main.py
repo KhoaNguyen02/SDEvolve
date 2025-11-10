@@ -8,7 +8,7 @@ from kozax.genetic_programming import GeneticProgramming
 from utils import get_data
 
 
-def run_experiment(args, operator_list=None, reward_fn=None, save_path=None, device='cpu'):
+def run_experiment(args, operator_list=None, feedback_fn=None, save_path=None, device='cpu'):
     # env parameters
     param_setting = args.get("param_setting")
     batch_size = args.get("batch_size")
@@ -46,14 +46,14 @@ def run_experiment(args, operator_list=None, reward_fn=None, save_path=None, dev
         # Control readout
         [f"a{i}" for i in range(state_size)]
     ]
-    if reward_fn is None:
+    if feedback_fn is None:
         for var_list in variable_list:
             var_list.append("tar")
     else:
         for var_list in variable_list:
             var_list.append("r")
 
-    fitness_function = SHOEvaluator(env, state_size, dt0, reward_fn=reward_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
+    fitness_function = SHOEvaluator(env, state_size, dt0, feedback_fn=feedback_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
     strategy = GeneticProgramming(
         num_generations,
         population_size, 
