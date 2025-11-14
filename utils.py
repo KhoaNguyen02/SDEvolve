@@ -6,7 +6,7 @@ import jax.random as jr
 import numpy as np
 import sympy as sp
 
-from evaluators.sho_evaluator import SHOEvaluator
+from evaluators.sho_evaluator import *
 from kozax.genetic_programming import GeneticProgramming
 
 
@@ -65,10 +65,10 @@ def get_unique_solutions(solutions, fitness_values=None, tolerance=1e-10):
     return unique_solutions
 
 
-def get_data(key, env, batch_size, dt, T, param_setting, dynamic_target=False):
+def get_data(key, env, batch_size, dt, T, param_setting, n_jumps):
     init_key, noise_key, param_key = jr.split(key, 3)
     ts = jnp.arange(0, T, dt)
-    x0, targets = env.sample_init_states(batch_size, ts, init_key, dynamic_target=dynamic_target)
+    x0, targets = env.sample_init_states(batch_size, ts, init_key, n_jumps)
     noise_keys = jr.split(noise_key, batch_size)
 
     params = env.sample_params(batch_size, param_setting, ts, param_key)
@@ -91,7 +91,7 @@ def validate(models, strategy, data):
     return fitnesses[best_idx], models[best_idx]
 
 
-def get_strategy(env, operator_list, dt0, feedback_fn, max_steps=2000, device="cpu"):
+def get_strategy(env, operator_list, dt0, feedback_fn, sign_estimation=True, max_steps=2000, device="cpu"):
     variable_list = [
         # Latent memory
         [f"y{i}" for i in range(env.n_obs)] +
@@ -107,11 +107,12 @@ def get_strategy(env, operator_list, dt0, feedback_fn, max_steps=2000, device="c
                 var_list.append("tar")
         else:
             for var_list in variable_list:
-                var_list.append("r")
+                var_list.append("e")
 
         layer_sizes = jnp.array([2, env.n_control_inputs])
-
-        fitness_function = SHOEvaluator(env, 2, dt0, feedback_fn=feedback_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
+        fitness_function = SHOEvaluator(env, 2, dt0, 
+                                        feedback_fn=feedback_fn, sign_estimation=sign_estimation, 
+                                        solver=diffrax.GeneralShARK(), max_steps=max_steps)
 
         strategy = GeneticProgramming(
             fitness_function=fitness_function,
