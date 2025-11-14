@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 from environments.harmonic_oscillator import HarmonicOscillator
-from evaluators.sho_evaluator import SHOEvaluator
+from evaluators.sho_evaluator import *
 from kozax.genetic_programming import GeneticProgramming
 from utils import get_data
 
@@ -51,7 +51,7 @@ def run_experiment(args, operator_list=None, feedback_fn=None, save_path=None, d
             var_list.append("tar")
     else:
         for var_list in variable_list:
-            var_list.append("r")
+            var_list.append("e")
 
     fitness_function = SHOEvaluator(env, state_size, dt0, feedback_fn=feedback_fn, solver=diffrax.GeneralShARK(), max_steps=max_steps)
     strategy = GeneticProgramming(
@@ -71,7 +71,7 @@ def run_experiment(args, operator_list=None, feedback_fn=None, save_path=None, d
     best_fitnesses = []
 
     # Get the data
-    data = get_data(data_key, env, batch_size, dt, T, param_setting)
+    data = get_data(data_key, env, batch_size, dt, T, param_setting, n_jumps=0)
 
     # Run the evolution
     best_fitnesses = strategy.fit(init_key, data, verbose=True, save_pareto_front=True, path_to_file=save_path)
