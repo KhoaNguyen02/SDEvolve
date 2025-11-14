@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import diffrax
 
 from .base_environment import EnvironmentBase
 
@@ -20,21 +19,19 @@ class HarmonicOscillator(EnvironmentBase):
         self.Q = jnp.array([[self.q, 0], [0, 0]])
         self.R = jnp.array([[self.r]])
 
-    def sample_init_states(self, batch_size, ts, key, dynamic_target=False, A=1.0, p_jump=0.2, interval=10):
+    def sample_init_states(self, batch_size, ts, key, n_jumps):
         init_key, target_key, jump_key = jrandom.split(key, 3)
         x0 = self.mu0 + jrandom.normal(init_key, shape=(batch_size, self.n_var)) @ self.P0
         base_target = jrandom.uniform(target_key, shape=(batch_size, self.n_targets), minval=-3.0, maxval=3.0)
 
-        if not dynamic_target:
+        if n_jumps == 0:
             targets = jnp.repeat(base_target[:, None, :], len(ts), axis=1)
         else:
-            jump_key1, jump_key2 = jrandom.split(jump_key, 2)
-            jumps = jrandom.bernoulli(jump_key1, p_jump, shape=(batch_size, len(ts))) * A * (
-                jrandom.choice(jump_key2, jnp.array([-1.0, 1.0]), shape=(batch_size, len(ts)))
-            )
+            interval = len(ts) // n_jumps + len(ts) % n_jumps
             mask = jnp.arange(len(ts)) % interval == 0
-            targets = jax.vmap(lambda base, jump: base + jnp.cumsum(jump * mask))(base_target, jumps)
-            targets = targets[:, :, None]
+            jumps = jrandom.uniform(jump_key, shape=(batch_size, len(ts)), minval=-2.0, maxval=2.0)
+            target = base_target + jnp.cumsum(jumps * mask, axis=1)
+            targets = target[:, :, None]
         return x0, targets
 
     def sample_params(self, batch_size, mode, ts, key):
