@@ -8,13 +8,16 @@ from .base_evaluator import BaseEvaluator
 
 
 class SHOEvaluator(BaseEvaluator):
-    def __init__(self, env, state_size, dt0, feedback_fn, solver=diffrax.Euler(), max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
+    def __init__(self, env, state_size, dt0, feedback_fn, 
+                sign_estimation=True, solver=diffrax.Euler(), 
+                max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
         super().__init__(env, state_size, dt0)
         self.solver = solver
         self.max_steps = max_steps
         self.stepsize_controller = stepsize_controller
         self.feedback_fn = feedback_fn
-        self.eps = 1e-3
+        self.eps = 0.01
+        self.sign_estimation = sign_estimation
 
     def __call__(self, candidate, data, tree_evaluator):
         _, _, _, _, fitness, fbs = jax.vmap(
@@ -32,38 +35,47 @@ class SHOEvaluator(BaseEvaluator):
 
         saveat = diffrax.SaveAt(ts=ts)
         process_noise_key, obs_noise_key = jr.split(noise_key, 2)
+
         _x0 = jnp.concatenate([x0, jnp.zeros(self.state_size)])
-        targets = diffrax.LinearInterpolation(ts, target.squeeze(-1) if target.ndim == 2 else target)
+        targets = diffrax.LinearInterpolation(ts, target.squeeze(-1))
 
         brownian_motion = diffrax.UnsafeBrownianPath(
-            shape=(self.latent_size,), key=process_noise_key, levy_area=diffrax.SpaceTimeLevyArea
+            shape=(self.latent_size,), 
+            key=process_noise_key,
+            levy_area=diffrax.SpaceTimeLevyArea
         )
+
         system = diffrax.MultiTerm(
-            diffrax.ODETerm(self._drift), diffrax.ControlTerm(self._diffusion, brownian_motion)
+            diffrax.ODETerm(self._drift), 
+            diffrax.ControlTerm(self._diffusion, brownian_motion)
         )
 
         sol = diffrax.diffeqsolve(
-            system, self.solver, ts[0], ts[-1], self.dt0, _x0, 
+            system, self.solver, ts[0], ts[-1], self.dt0, _x0,
             saveat=saveat, adjoint=diffrax.DirectAdjoint(), max_steps=self.max_steps,
-            args=(env, state_equation, readout, obs_noise_key, targets, tree_evaluator), 
+            args=(env, state_equation, readout, obs_noise_key, targets, tree_evaluator),
             stepsize_controller=self.stepsize_controller, throw=False
         )
 
         xs = sol.ys[:, :self.latent_size]
         _, ys = jax.lax.scan(env.f_obs, obs_noise_key, (ts, xs))
         activities = sol.ys[:, self.latent_size:]
+
         if self.feedback_fn:
-            # feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
-            keys = jr.split(obs_noise_key, len(ts))
-            feedbacks = jax.vmap(
-                lambda t, x, k: self._get_feedback(x, jnp.squeeze(targets.evaluate(t)), k)
-            )(ts, xs, keys)
+            if not self.sign_estimation:
+                feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
+            else:
+                keys = jr.split(obs_noise_key, len(ts))
+                feedbacks = jax.vmap(
+                    lambda t, x, k: self._get_feedback(x, jnp.squeeze(targets.evaluate(t)), k)
+                )(ts, xs, keys)
         else:
             feedbacks = targets.evaluate(ts)[:, None]
 
         us = jax.vmap(lambda y, a, tar: tree_evaluator(
             readout, jnp.concatenate([y, a, jnp.zeros(self.control_size), tar])), in_axes=[0, 0, 0]
         )(ys, activities, feedbacks)
+
         fitness = env.fitness_function(xs, us, targets.evaluate(ts), ts)
         return xs, ys, us, activities, fitness, feedbacks
 
@@ -76,10 +88,13 @@ class SHOEvaluator(BaseEvaluator):
         _, y = env.f_obs(obs_noise_key, (t, x))
 
         if self.feedback_fn:
-            # feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
-            # target_t = feedback_t
-            feedback_t = self._get_feedback(x, target_t, jr.fold_in(obs_noise_key, jnp.int32(jnp.round(t / self.dt0))))
-            target_t = jnp.atleast_1d(feedback_t)
+            if not self.sign_estimation:
+                feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
+                target_t = feedback_t
+            else:
+                feedback_t = self._get_feedback(x, target_t, jr.fold_in(obs_noise_key, jnp.int16(jnp.round(t / self.dt0))))
+                target_t = jnp.atleast_1d(feedback_t)
+
         u = tree_evaluator(
             readout,
             jnp.concatenate([jnp.zeros(self.obs_size), a, jnp.zeros(self.control_size), target_t])
@@ -102,10 +117,10 @@ class SHOEvaluator(BaseEvaluator):
         )
 
     def _get_feedback(self, x, target, key):
-        delta = jr.normal(key, x.shape, dtype=x.dtype)
-        phi_p = self.feedback_fn(x + self.eps * delta, target)
-        phi_m = self.feedback_fn(x - self.eps * delta, target)
-        g = ((phi_p - phi_m) / (2.0 * self.eps)) * delta
-        s = -jnp.sign(g[0])
+        k = jnp.ones_like(x)
+        delta = jr.uniform(key, minval=0.1, maxval=1.0, shape=x.shape) * self.eps
+        e_p = self.feedback_fn(x + delta * k, target)
+        e_m = self.feedback_fn(x - delta * k, target)
+        s = -jnp.sign(e_p - e_m)
         d = self.feedback_fn(x, target)
         return jnp.reshape(s * d, (1,))
