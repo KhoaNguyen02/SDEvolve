@@ -8,16 +8,18 @@ from .base_evaluator import BaseEvaluator
 
 
 class SHOEvaluator(BaseEvaluator):
-    def __init__(self, env, state_size, dt0, feedback_fn, 
-                sign_estimation=True, solver=diffrax.Euler(), 
-                max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
+    def __init__(self, env, state_size, dt0, learn_condition, feedback_fn, sign_estimation, 
+                solver=diffrax.Euler(), max_steps=16**4, stepsize_controller=diffrax.ConstantStepSize()):
+        assert learn_condition in [1, 2, 3], "learn_condition must be 1, 2, or 3"
+        assert learn_condition != 2 or feedback_fn is not None, "Feedback function required for condition 2"
         super().__init__(env, state_size, dt0)
+        self.learn_condition = learn_condition
+        self.feedback_fn = feedback_fn
+        self.sign_estimation = sign_estimation
         self.solver = solver
         self.max_steps = max_steps
         self.stepsize_controller = stepsize_controller
-        self.feedback_fn = feedback_fn
-        self.eps = 0.01
-        self.sign_estimation = sign_estimation
+        self.eps = 1e-3
 
     def __call__(self, candidate, data, tree_evaluator):
         _, _, _, _, fitness, fbs = jax.vmap(
@@ -61,16 +63,18 @@ class SHOEvaluator(BaseEvaluator):
         _, ys = jax.lax.scan(env.f_obs, obs_noise_key, (ts, xs))
         activities = sol.ys[:, self.latent_size:]
 
-        if self.feedback_fn:
-            if not self.sign_estimation:
-                feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
-            else:
+        if self.learn_condition == 1:
+            feedbacks = targets.evaluate(ts)[:, None]
+        elif self.learn_condition == 2:
+            if self.sign_estimation:
                 keys = jr.split(obs_noise_key, len(ts))
                 feedbacks = jax.vmap(
                     lambda t, x, k: self._get_feedback(x, jnp.squeeze(targets.evaluate(t)), k)
                 )(ts, xs, keys)
+            else:
+                feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
         else:
-            feedbacks = targets.evaluate(ts)[:, None]
+            feedbacks = jnp.zeros_like(targets.evaluate(ts)[:, None])
 
         us = jax.vmap(lambda y, a, tar: tree_evaluator(
             readout, jnp.concatenate([y, a, jnp.zeros(self.control_size), tar])), in_axes=[0, 0, 0]
@@ -87,13 +91,17 @@ class SHOEvaluator(BaseEvaluator):
 
         _, y = env.f_obs(obs_noise_key, (t, x))
 
-        if self.feedback_fn:
-            if not self.sign_estimation:
-                feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
-                target_t = feedback_t
-            else:
+        if self.learn_condition == 1:
+            pass
+        elif self.learn_condition == 2:
+            if self.sign_estimation:
                 feedback_t = self._get_feedback(x, target_t, jr.fold_in(obs_noise_key, jnp.int16(jnp.round(t / self.dt0))))
                 target_t = jnp.atleast_1d(feedback_t)
+            else:
+                feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
+                target_t = feedback_t
+        else:
+            target_t = jnp.zeros_like(target_t)
 
         u = tree_evaluator(
             readout,
