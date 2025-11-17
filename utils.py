@@ -91,7 +91,10 @@ def validate(models, strategy, data):
     return fitnesses[best_idx], models[best_idx]
 
 
-def get_strategy(env, operator_list, dt0, feedback_fn, sign_estimation=True, max_steps=2000, device="cpu"):
+def get_strategy(env, learn_condition, feedback_fn,  sign_estimation, operator_list, dt0, max_steps=2000, device="cpu"):
+    assert learn_condition in [1, 2, 3], "learn_condition must be 1, 2, or 3"
+    assert learn_condition != 2 or feedback_fn is not None, "Feedback function required for condition 2"
+
     variable_list = [
         # Latent memory
         [f"y{i}" for i in range(env.n_obs)] +
@@ -101,26 +104,26 @@ def get_strategy(env, operator_list, dt0, feedback_fn, sign_estimation=True, max
         # Control readout
         [f"a{i}" for i in range(2)]
     ]
-    if env.n_targets > 0:
-        if feedback_fn is None:
-            for var_list in variable_list:
-                var_list.append("tar")
-        else:
-            for var_list in variable_list:
-                var_list.append("e")
 
-        layer_sizes = jnp.array([2, env.n_control_inputs])
-        fitness_function = SHOEvaluator(env, 2, dt0, 
-                                        feedback_fn=feedback_fn, sign_estimation=sign_estimation, 
-                                        solver=diffrax.GeneralShARK(), max_steps=max_steps)
+    if learn_condition == 1:    
+        for var_list in variable_list:
+            var_list.append("tar")
+    elif learn_condition == 2:
+        for var_list in variable_list:
+            var_list.append("e")
 
-        strategy = GeneticProgramming(
-            fitness_function=fitness_function,
-            num_generations=1,
-            population_size=10,
-            operator_list=operator_list,
-            variable_list=variable_list,
-            layer_sizes=layer_sizes,
-            device_type=device
-        )
+    state_size = 2
+    layer_sizes = jnp.array([state_size, env.n_control_inputs])
+    fitness_function = SHOEvaluator(env, state_size, dt0, learn_condition, feedback_fn, sign_estimation, 
+                                    solver=diffrax.GeneralShARK(), max_steps=max_steps)
+
+    strategy = GeneticProgramming(
+        fitness_function=fitness_function,
+        num_generations=1,
+        population_size=10,
+        operator_list=operator_list,
+        variable_list=variable_list,
+        layer_sizes=layer_sizes,
+        device_type=device
+    )
     return strategy, fitness_function
