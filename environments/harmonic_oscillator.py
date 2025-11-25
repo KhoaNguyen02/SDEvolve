@@ -21,15 +21,16 @@ class HarmonicOscillator(EnvironmentBase):
 
     def sample_init_states(self, batch_size, ts, key, n_jumps):
         init_key, target_key, jump_key = jrandom.split(key, 3)
-        x0 = self.mu0 + jrandom.normal(init_key, shape=(batch_size, self.n_var)) @ self.P0
-        base_target = jrandom.uniform(target_key, shape=(batch_size, self.n_targets), minval=-3.0, maxval=3.0)
+        x0 = self.mu0 + jrandom.normal(init_key, shape=(self.n_var,)) @ self.P0
+        x0 = jnp.repeat(x0[None, :], batch_size, axis=0)
+        base_target = jrandom.uniform(target_key, shape=(batch_size, self.n_targets), minval=-2.0, maxval=2.0)
 
         if n_jumps == 0:
             targets = jnp.repeat(base_target[:, None, :], len(ts), axis=1)
         else:
             interval = len(ts) // n_jumps + len(ts) % n_jumps
             mask = jnp.arange(len(ts)) % interval == 0
-            jumps = jrandom.uniform(jump_key, shape=(batch_size, len(ts)), minval=-2.0, maxval=2.0)
+            jumps = jrandom.uniform(jump_key, shape=(batch_size, len(ts)), minval=-1.0, maxval=1.0)
             target = base_target + jnp.cumsum(jumps * mask, axis=1)
             targets = target[:, :, None]
         return x0, targets
