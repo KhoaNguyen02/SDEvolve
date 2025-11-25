@@ -19,7 +19,7 @@ class SHOEvaluator(BaseEvaluator):
         self.solver = solver
         self.max_steps = max_steps
         self.stepsize_controller = stepsize_controller
-        self.eps = 1e-3
+        self.eps = 0.01
 
     def __call__(self, candidate, data, tree_evaluator):
         _, _, _, _, fitness, fbs = jax.vmap(
@@ -64,8 +64,10 @@ class SHOEvaluator(BaseEvaluator):
         activities = sol.ys[:, self.latent_size:]
 
         if self.learn_condition == 1:
+            ys_ = jnp.zeros_like(ys)
             feedbacks = targets.evaluate(ts)[:, None]
         elif self.learn_condition == 2:
+            ys_ = jnp.zeros_like(ys)
             if self.sign_estimation:
                 keys = jr.split(obs_noise_key, len(ts))
                 feedbacks = jax.vmap(
@@ -75,11 +77,11 @@ class SHOEvaluator(BaseEvaluator):
                 feedbacks = jax.vmap(self.feedback_fn)(xs, targets.evaluate(ts)[:, None])
         else:
             feedbacks = jnp.zeros_like(targets.evaluate(ts)[:, None])
+            ys_ = jnp.zeros_like(ys)
 
         us = jax.vmap(lambda y, a, tar: tree_evaluator(
             readout, jnp.concatenate([y, a, jnp.zeros(self.control_size), tar])), in_axes=[0, 0, 0]
-        )(ys, activities, feedbacks)
-
+        )(ys_, activities, feedbacks)
         fitness = env.fitness_function(xs, us, targets.evaluate(ts), ts)
         return xs, ys, us, activities, fitness, feedbacks
 
@@ -101,6 +103,7 @@ class SHOEvaluator(BaseEvaluator):
                 feedback_t = jnp.atleast_1d(self.feedback_fn(x, target_t))
                 target_t = feedback_t
         else:
+            _, y = env.f_obs(obs_noise_key, (t, x), noisy=False)
             target_t = jnp.zeros_like(target_t)
 
         u = tree_evaluator(
