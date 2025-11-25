@@ -43,10 +43,12 @@ class EnvironmentBase(abc.ABC):
     def sample_params(self, batch_size, mode, ts, key):
         raise NotImplementedError
 
-    def f_obs(self, key, t_x):
+    def f_obs(self, key, t_x, noisy=True):
         t, x = t_x
         new_key = jrandom.fold_in(key, force_bitcast_convert_type(t))
-        out = self.C@x + jrandom.normal(new_key, shape=(self.n_obs,))@self.W
+        out = self.C @ x
+        if noisy:
+            out = out + jrandom.normal(new_key, shape=(self.n_obs,)) @ self.W
         return key, out
 
     @abc.abstractmethod
