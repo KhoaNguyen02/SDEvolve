@@ -1,0 +1,13 @@
+Complexity,Fitness,Equation 0,Equation 1,Equation 2
+3,12.437965,rpe,y0,rpe
+5,1.9733813,a1,a1,-0.0131*a1
+5,1.9733813,a0 + y0,a1,a1
+7,1.968606,-0.558,rpe,0.00524*a0*rpe
+9,1.8705842,a0*a1,rpe*y0,0.0618*a1
+11,1.4910101,rpe,rpe*y0,a0*a1*(a0 + rpe)
+13,1.3232527,rpe,rpe*y0 + rpe,a0*a1*(a0 + rpe)
+13,1.3232527,rpe,rpe*y0 + rpe,a0*a1*(a0 + rpe)
+15,1.3085694,rpe,rpe*y0 + rpe,a1*(a0 + 0.0352)*(a0 + rpe)
+15,1.3085694,rpe,rpe*y0 + rpe,a1*(a0 + 0.0352)*(a0 + rpe)
+17,1.2621377,rpe,rpe + y0*(2*rpe + 0.589),a1*(-a0 - rpe - 0.227)
+21,1.2106755,a0*rpe + rpe,(a1**2 + y0)*(rpe + 0.285),a0*a1*(a0 + rpe)
