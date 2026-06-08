@@ -1,0 +1,17 @@
+Complexity,Fitness,Equation 0,Equation 1,Equation 2
+7,1.5383413,rpe,rpe*y0,a0 + a1
+9,1.2153373,rpe*(a1 + y0),0.387,2*a0
+11,1.1971476,2*rpe,-a1 + rpe*y0,a1*rpe
+13,1.1034861,0.327,rpe*y0,4*a1 + rpe
+15,0.87509364,-0.400,rpe*y0 - y1,4*a1 + rpe
+19,0.84956634,a0,rpe*y0 - y1,a0 + 5*a1 + rpe
+21,0.78213704,a0,rpe*y0 + rpe*y1 - 2*y1,4*a1 + rpe
+23,0.75965405,-0.349,rpe*y0 + rpe*y1 + rpe - 2*y1,4*a1 + rpe
+25,0.7502217,-0.944,rpe*y0 + rpe*y1 + 0.745*rpe - 2*y1,4*a1 + rpe
+25,0.7502217,a0,rpe*y0 + rpe*y1 + 0.745*rpe - 2*y1,4*a1 + rpe
+27,0.74098265,a0,rpe*y0 + rpe*y1 + 0.745*rpe - 2*y1,a1**2 + 3*a1 + rpe
+29,0.73381615,-0.349*a1*y1,rpe*y0 + rpe*y1 + rpe - 2*y1,a0 + 4*a1 + rpe
+33,0.7337444,-0.698*a1**2*y0,rpe*y0 + rpe*y1 + rpe - 2*y1,a0 + 4*a1 + rpe
+35,0.7326746,a1**2*(-0.349*a1 - 0.349*y0 - 0.219),rpe*y0 + rpe*y1 + rpe - 2*y1,a0 + 4*a1 + rpe
+37,0.7266909,a1*(a1*rpe*(a1*y0 + 0.628) + y0),rpe*y0 + rpe*y1 + rpe - 2*y1,a0 + 4*a1 + rpe
+39,0.7237028,a1*(-0.122*rpe + 0.349*y0 + 0.264),rpe*y0 + rpe*y1 + rpe - 2*y1,a0 + 4*a1 + rpe
